@@ -1,0 +1,48 @@
+From: d1-riscv-arch-image-builder
+Subject: [PATCH] binman: use importlib.resources instead of pkg_resources
+
+pkg_resources was removed in setuptools 81, so binman fails to even import on
+a current Arch container:
+
+  File "tools/binman/control.py", line 16, in <module>
+      import pkg_resources
+  ModuleNotFoundError: No module named 'pkg_resources'
+  make: *** [Makefile:1124: .binman_stamp] Error 1
+
+control.py already imports importlib.resources and uses it elsewhere, as does
+tools/buildman/main.py; these two call sites were simply left behind. Note that
+'etype' has no __init__.py, so it has to be reached as a subdirectory of the
+binman package rather than as a package in its own right.
+
+diff --git a/tools/binman/control.py b/tools/binman/control.py
+index c6d3205b..ee8c8238 100644
+--- a/tools/binman/control.py
++++ b/tools/binman/control.py
+@@ -13,7 +13,6 @@ except ImportError:  # pragma: no cover
+     # for Python 3.6
+     import importlib_resources
+ import os
+-import pkg_resources
+ import re
+ 
+ import sys
+@@ -96,7 +95,8 @@ def _ReadMissingBlobHelp():
+             msg = ''
+         return tag, msg
+ 
+-    my_data = pkg_resources.resource_string(__name__, 'missing-blob-help')
++    my_data = (importlib.resources.files('binman')
++               .joinpath('missing-blob-help').read_bytes())
+     re_tag = re.compile('^([-a-z0-9]+):$')
+     result = {}
+     tag = None
+@@ -151,7 +151,8 @@ def GetEntryModules(include_testing=True):
+     Returns:
+         Set of paths to entry class filenames
+     """
+-    glob_list = pkg_resources.resource_listdir(__name__, 'etype')
++    glob_list = [item.name for item in
++                 importlib.resources.files('binman').joinpath('etype').iterdir()]
+     glob_list = [fname for fname in glob_list if fname.endswith('.py')]
+     return set([os.path.splitext(os.path.basename(item))[0]
+                 for item in glob_list
