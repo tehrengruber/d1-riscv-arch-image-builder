@@ -2,3 +2,5 @@ build/*
 mnt/*
 output/*
 archriscv-20210601.tar.zst
+archlinux_riscv*.img
+*.tar.zst
