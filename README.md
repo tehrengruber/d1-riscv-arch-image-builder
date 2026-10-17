@@ -22,7 +22,7 @@ There are multiple sources for an Archlinux image:
 - mainline OpenSBI
 - U-Boot based on https://github.com/smaeul/u-boot.git
 - mainline kernel
-- WiFi driver (rtl8723ds) based on https://github.com/lwfinger/rtl8723ds
+- WiFi via the mainline `rtw88` driver (`rtw88_8723ds`, SDIO), with firmware from linux-firmware
 - RootFS based on https://archriscv.felixc.at (root password is ~~`sifive`~~ `archriscv`)
 
 ## How to build on ArchLinux
@@ -40,6 +40,76 @@ There are multiple sources for an Archlinux image:
 1. Run `1_compile.sh` which compiles everything into the `output` folder.
 1. Run `2_create_sd.sh /dev/<device>` to flash everything on the SD card.
 1. Configure your Archlinux :rocket:
+
+## How to build in a container (podman, unprivileged)
+The compile stage needs no privileges at all, so it can run in a rootless podman
+container. Only the flashing stage touches block devices and needs root.
+
+1. One-time host setup (this part does need root):
+   `pacman -S podman parted` and make sure you have subuid/subgid ranges, e.g.
+   `usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER`
+1. Edit `consts.sh` to your needs (board `DEVICE_TREE`, kernel version, ...).
+1. Run `./build_in_container.sh` **as your normal user**. It builds the toolchain
+   image from `Containerfile`, runs `1_compile.sh` inside it and downloads the
+   rootfs tarball.
+   - Rootless podman maps the container's root to your own user, so `build/`,
+     `output/` and the rootfs tarball end up owned by you, not by root.
+   - Set `CONTAINER_ENGINE=docker` to use docker instead, but note that docker's
+     daemon runs as root, so artifacts will be root-owned.
+   - Pass a command to get a shell in the build environment:
+     `./build_in_container.sh -c 'bash'`
+1. Flash, which is the only step that needs root:
+   - to an SD card: `sudo ./2_create_sd.sh /dev/<device>`
+   - to an image file: `sudo ./flash_image_file.sh archlinux_riscv_mangopi.img 3072`
+
+`USE_CHROOT=0` is the default here, so a plain flash needs only `parted` and
+`e2fsprogs` as root. See *Entering the RISC-V rootfs* below for configuring the
+image afterwards.
+
+## Entering the RISC-V rootfs
+To configure the image before first boot, chroot into it with `arch-chroot` and
+qemu-user-static:
+
+```sh
+pacman -S arch-install-scripts qemu-user-static qemu-user-static-binfmt
+systemctl restart systemd-binfmt
+sudo mount /dev/<device>2 ./mnt && sudo mount /dev/<device>1 ./mnt/boot
+sudo arch-chroot ./mnt
+```
+
+`qemu-user-static-binfmt` registers the riscv64 `binfmt_misc` handler, which is
+what makes the foreign binaries runnable; without it everything in the chroot
+fails with "exec format error". `2_create_sd.sh` prints these commands with your
+actual device paths filled in when it finishes.
+
+Setting `USE_CHROOT=1` in `consts.sh` makes `2_create_sd.sh` do the chroot for you
+right after flashing instead.
+
+*Note: `Dockerfile` and `build_img.sh` are the older, CI-specific variant used by
+the GitHub Actions workflow; they are kept as-is.*
+
+## Updating only the kernel
+After changing the kernel config and re-running the compile stage, install the
+new kernel onto an already-flashed card without touching anything else on it:
+
+```sh
+sudo ./3_update_kernel.sh /dev/<device>
+```
+
+It replaces `/boot/Image`, `/boot/Image.gz` and `/lib/modules/<release>`, re-runs
+`depmod`, and reinstalls the WiFi firmware. Do *not* use `2_create_sd.sh` for
+this - it repartitions the card and discards everything you configured.
+
+## Local patches
+`1_compile.sh` applies every `patches/<component>/*.patch` to the matching tree
+right after cloning it, because the D1 U-Boot fork dates from 2023 and does not
+build against a current toolchain unmodified:
+
+- `0001-pylibfdt-python3-c-api.patch` - pylibfdt's SWIG typemaps still call the
+  Python 2 C API (`PyInt_AsLong`, `PyString_FromString`). Harmless warnings until
+  GCC 14 made them errors.
+- `0002-binman-importlib-resources.patch` - binman imports `pkg_resources`, which
+  setuptools 81 removed.
 
 ## Using loop image file instead of a SD card
 Simply loop it using `sudo losetup -f -P <file>` and then use `/dev/loopX` as the target device.
